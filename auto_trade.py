@@ -94,6 +94,7 @@ def open_virtual_trade(symbol, data):
         'entry_price': data['price_idr'],
         'margin': round(margin, 2),
         'notional': round(notional, 2),
+        'leverage': LEVERAGE,
         'tp1': data['tp1_idr'], # Kita asumsikan fungsi analysis return idr
         'rsi': data['rsi'],
         'opened_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -267,32 +268,46 @@ def api_close(pid):
 @app.route('/api/account')
 def api_account():
     acc = load_account()
-    unrealized = 0
+    unrealized_pnl = 0
+    used_margin = 0
     formatted_positions = []
     
+    # Proses Posisi Aktif
     for pid, p in acc['positions'].items():
         cp = current_prices.get(p['symbol'], p['entry_price'])
         pnl = calculate_pnl(p, cp)
-        unrealized += pnl
+        unrealized_pnl += pnl
+        used_margin += p['margin']
         
-        # Dashboard butuh pnl_pct untuk bar progress
-        p['pnl_pct'] = round((pnl / p['margin']) * 100, 2) if p['margin'] > 0 else 0
+        # Tambahkan detail yang dibutuhkan dashboard index.html
+        p['id'] = pid
         p['current_price'] = cp
+        p['pnl'] = round(pnl, 2)
+        # Kalkulasi persentase keuntungan untuk bar progress
+        p['pnl_pct'] = round((pnl / p['margin']) * 100, 2) if p['margin'] > 0 else 0
         formatted_positions.append(p)
     
-    total_return_pct = round(((acc['balance'] + unrealized - acc['initial_balance']) / acc['initial_balance']) * 100, 2)
+    # Kalkulasi statistik akun
+    equity = acc['balance'] + used_margin + unrealized_pnl
+    total_return_pct = round(((equity - acc['initial_balance']) / acc['initial_balance']) * 100, 2)
     
     stats = {
-        'balance': round(acc['balance'], 2),
-        'equity': round(acc['balance'] + unrealized, 2),
-        'unrealized_pnl': round(unrealized, 2),
-        'total_return_pct': total_return_pct, # Tambahkan ini agar sidebar tidak kosong
+        'balance': round(acc['balance'], 2),        # Saldo yang belum terpakai (Available)
+        'used_margin': round(used_margin, 2),       # Margin yang sedang "nyangkut" di trade
+        'equity': round(equity, 2),                 # Total saldo + profit/loss jalan
+        'unrealized_pnl': round(unrealized_pnl, 2),
+        'total_return_pct': total_return_pct,
         'total_trades': acc['total_trades'],
         'win_rate': round((acc['winning_trades']/acc['total_trades']*100),1) if acc['total_trades']>0 else 0,
-        'open_positions': len(acc['positions'])
+        'open_positions': len(formatted_positions)
     }
-    return jsonify({"stats": stats, "positions": formatted_positions, "history": acc['history'][-10:]})
-
+    
+    return jsonify({
+        "stats": stats, 
+        "positions": formatted_positions, 
+        "history": acc.get('history', [])[-10:] # Ambil 10 history terakhir
+    })
+    
 @app.route('/api/account/reset', methods=['POST'])
 def api_reset():
     if not _auth(): return jsonify({"error":"Unauthorized"}), 401
