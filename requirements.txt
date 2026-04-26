@@ -1,0 +1,8 @@
+flask
+ccxt
+pandas
+numpy
+requests
+websocket-client
+python-dotenv
+pyTelegramBotAPI
