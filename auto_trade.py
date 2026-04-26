@@ -266,6 +266,22 @@ def api_account():
     }
     return jsonify({"stats": stats, "positions": list(acc['positions'].values()), "history": acc['history'][-10:]})
 
+@app.route('/api/account/reset', methods=['POST'])
+def api_reset():
+    if not _auth(): return jsonify({"error":"Unauthorized"}), 401
+    # Fungsi reset_account harus dibuat untuk menghapus file JSON atau mereset dictionary
+    acc = {
+        'balance': 1000.0, 
+        'initial_balance': 1000.0,
+        'positions': {}, 
+        'history': [], 
+        'total_trades': 0,
+        'winning_trades': 0, 
+        'total_pnl': 0.0
+    }
+    save_account(acc)
+    return jsonify({"success": True, "message": "Account reset to $1000"})
+
 @app.route('/api/intelligence')
 def get_intelligence():
     reports = []
