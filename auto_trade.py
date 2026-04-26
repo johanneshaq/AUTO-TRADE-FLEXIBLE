@@ -213,8 +213,9 @@ def scanner_engine():
                 if data is None: continue
             
                 coin_name = symbol.split('/')[0]
+                data['symbol'] = symbol 
                 data['time'] = datetime.now().strftime('%H:%M:%S')
-                active_alerts[coin_name] = data 
+                active_alerts[coin_name] = data
 
                 # UPDATE POSISI VIRTUAL
                 update_virtual_positions()
@@ -309,11 +310,14 @@ def api_account():
     
 @app.route('/api/account/reset', methods=['POST'])
 def api_reset():
-    if not _auth(): return jsonify({"error":"Unauthorized"}), 401
-    # Fungsi reset_account harus dibuat untuk menghapus file JSON atau mereset dictionary
+    auth = request.authorization
+    # Gunakan check_auth yang sudah kamu buat di baris 42
+    if not auth or not check_auth(auth.username, auth.password): 
+        return authenticate()
+        
     acc = {
-        'balance': 1000.0, 
-        'initial_balance': 1000.0,
+        'balance': INITIAL_BALANCE, 
+        'initial_balance': INITIAL_BALANCE,
         'positions': {}, 
         'history': [], 
         'total_trades': 0,
