@@ -78,7 +78,13 @@ def calculate_pnl(pos, current_price):
 
 def open_virtual_trade(symbol, data):
     acc = load_account()
-    if len(acc['positions']) >= MAX_OPEN_POSITIONS: return
+    margin_request = acc['balance'] * MARGIN_PER_TRADE
+    min_safe_balance = INITIAL_BALANCE * 0.25 
+    if (acc['balance'] - margin_request) < min_safe_balance:
+        print(f"⚠️ Trade skipped: Mempertahankan batas aman saldo 25% (${min_safe_balance})")
+        return None
+    if len(acc['positions']) >= MAX_OPEN_POSITIONS:
+        return None
     
     # Cek apakah koin ini sudah ada posisi aktif
     if any(p['symbol'] == symbol for p in acc['positions'].values()): return
@@ -272,40 +278,33 @@ def api_account():
     used_margin = 0
     formatted_positions = []
     
-    # Proses Posisi Aktif
     for pid, p in acc['positions'].items():
         cp = current_prices.get(p['symbol'], p['entry_price'])
         pnl = calculate_pnl(p, cp)
         unrealized_pnl += pnl
-        used_margin += p['margin']
+        used_margin += p.get('margin', 0)
         
-        # Tambahkan detail yang dibutuhkan dashboard index.html
+        # WAJIB: Lengkapi variabel agar JavaScript index.html bisa merender baris
         p['id'] = pid
+        p['symbol_display'] = p['symbol'].split('/')[0] # Ambil BTC saja dari BTC/IDR
         p['current_price'] = cp
         p['pnl'] = round(pnl, 2)
-        # Kalkulasi persentase keuntungan untuk bar progress
-        p['pnl_pct'] = round((pnl / p['margin']) * 100, 2) if p['margin'] > 0 else 0
+        p['pnl_pct'] = round((pnl / p['margin']) * 100, 2) if p.get('margin', 0) > 0 else 0
         formatted_positions.append(p)
     
-    # Kalkulasi statistik akun
     equity = acc['balance'] + used_margin + unrealized_pnl
-    total_return_pct = round(((equity - acc['initial_balance']) / acc['initial_balance']) * 100, 2)
-    
-    stats = {
-        'balance': round(acc['balance'], 2),        # Saldo yang belum terpakai (Available)
-        'used_margin': round(used_margin, 2),       # Margin yang sedang "nyangkut" di trade
-        'equity': round(equity, 2),                 # Total saldo + profit/loss jalan
-        'unrealized_pnl': round(unrealized_pnl, 2),
-        'total_return_pct': total_return_pct,
-        'total_trades': acc['total_trades'],
-        'win_rate': round((acc['winning_trades']/acc['total_trades']*100),1) if acc['total_trades']>0 else 0,
-        'open_positions': len(formatted_positions)
-    }
     
     return jsonify({
-        "stats": stats, 
-        "positions": formatted_positions, 
-        "history": acc.get('history', [])[-10:] # Ambil 10 history terakhir
+        "stats": {
+            "balance": round(acc['balance'], 2),
+            "used_margin": round(used_margin, 2),
+            "equity": round(equity, 2),
+            "unrealized_pnl": round(unrealized_pnl, 2),
+            "total_return_pct": round(((equity - 1000) / 1000) * 100, 2),
+            "open_positions": len(formatted_positions)
+        },
+        "positions": formatted_positions, # Data untuk tabel Open Pos
+        "history": acc.get('history', [])[-10:] # Data untuk tabel History
     })
     
 @app.route('/api/account/reset', methods=['POST'])
