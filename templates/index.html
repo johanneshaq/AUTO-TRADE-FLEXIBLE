@@ -119,6 +119,22 @@
     margin-bottom: 14px;
   }
 
+.pie-container {
+  margin-top: 15px;
+  margin-bottom: 20px;
+  padding: 10px;
+  background: var(--bg2);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.pie-legend {
+  margin-top: 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+  
   /* ACCOUNT STATS */
   .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .stat-label { font-size: 0.7em; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; }
@@ -418,7 +434,35 @@
 <div class="layout">
 
   <!-- SIDEBAR -->
-  <div class="sidebar">
+ <div class="sidebar">
+  <div class="section-title">
+    <div class="glow-dot"></div>
+    PORTFOLIO ALLOCATION
+  </div>
+
+  <div class="pie-container">
+    <div class="pie-wrap">
+      <canvas id="pie-chart"></canvas>
+      <div class="pie-center">
+        <div class="pie-center-val" id="pie-center-val">—</div>
+        <div class="pie-center-label">POSITIONS</div>
+      </div>
+    </div>
+    
+    <div class="pie-legend" id="pie-legend"></div>
+  </div>
+
+  <div class="stats-grid">
+    <div class="stat-box">
+      <div class="stat-label">AVAILABLE BALANCE</div>
+      <div class="stat-val" id="stat-balance">$0.00</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-label">USED MARGIN</div>
+      <div class="stat-val" id="stat-margin">$0.00</div>
+    </div>
+    </div>
+</div>
 
     <!-- EQUITY -->
     <div class="panel">
