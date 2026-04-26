@@ -22,7 +22,7 @@ CHAT_IDS = [cid.strip() for cid in raw_chat_ids.split(",") if cid.strip()]
 WEB_PASSWORD = os.getenv("WEB_PASSWORD", "181268")
 
 if not TOKEN or not CHAT_IDS:
-    raise ValueError("❌ Kritis: TOKEN_LOW atau CHAT_ID belum diset di DATA.env.")
+    raise ValueError("❌ Kritis: TOKEN_MACRO atau CHAT_ID belum diset di DATA.env.")
 
 # ================== ⚙️ CONFIG VIRTUAL ACCOUNT ==================
 ACCOUNT_FILE       = "virtual_account_indodax.json"
@@ -267,21 +267,31 @@ def api_close(pid):
 @app.route('/api/account')
 def api_account():
     acc = load_account()
-    # Hitung uPnL Real-time
     unrealized = 0
-    for p in acc['positions'].values():
+    formatted_positions = []
+    
+    for pid, p in acc['positions'].items():
         cp = current_prices.get(p['symbol'], p['entry_price'])
-        unrealized += calculate_pnl(p, cp)
+        pnl = calculate_pnl(p, cp)
+        unrealized += pnl
+        
+        # Dashboard butuh pnl_pct untuk bar progress
+        p['pnl_pct'] = round((pnl / p['margin']) * 100, 2) if p['margin'] > 0 else 0
+        p['current_price'] = cp
+        formatted_positions.append(p)
+    
+    total_return_pct = round(((acc['balance'] + unrealized - acc['initial_balance']) / acc['initial_balance']) * 100, 2)
     
     stats = {
         'balance': round(acc['balance'], 2),
         'equity': round(acc['balance'] + unrealized, 2),
         'unrealized_pnl': round(unrealized, 2),
+        'total_return_pct': total_return_pct, # Tambahkan ini agar sidebar tidak kosong
         'total_trades': acc['total_trades'],
         'win_rate': round((acc['winning_trades']/acc['total_trades']*100),1) if acc['total_trades']>0 else 0,
         'open_positions': len(acc['positions'])
     }
-    return jsonify({"stats": stats, "positions": list(acc['positions'].values()), "history": acc['history'][-10:]})
+    return jsonify({"stats": stats, "positions": formatted_positions, "history": acc['history'][-10:]})
 
 @app.route('/api/account/reset', methods=['POST'])
 def api_reset():
@@ -299,11 +309,56 @@ def api_reset():
     save_account(acc)
     return jsonify({"success": True, "message": "Account reset to $1000"})
 
+@app.route('/api/status')
+def get_status():
+    """Mengaktifkan dashboard agar status menjadi 'LIVE'"""
+    return jsonify({
+        "ready": True, 
+        "phase": "SCANNING",
+        "progress": len(ALL_IDR_SYMBOLS),
+        "total": len(ALL_IDR_SYMBOLS),
+        "scanned": len(active_alerts)
+    })
+
+@app.route('/api/market')
+def api_market():
+    """Mengirim daftar koin ke tabel 'MARKET SIGNALS'"""
+    all_data = list(active_alerts.values())
+    
+    # Menghitung ringkasan untuk summary bar
+    longs = sum(1 for d in all_data if "ACCUMULATION" in d['signal'])
+    shorts = sum(1 for d in all_data if "DISTRIBUTION" in d['signal'])
+    ap_grade = sum(1 for d in all_data if "A+" in d['grade'])
+    
+    return jsonify({
+        "data": all_data,
+        "total_scanned": len(all_data),
+        "longs": longs,
+        "shorts": shorts,
+        "a_plus": ap_grade,
+        "timestamp": datetime.now().strftime('%H:%M:%S')
+    })
+
+@app.route('/api/prices')
+def api_prices():
+    """Sinkronisasi harga real-time di dashboard"""
+    return jsonify({"prices": current_prices})
+
 @app.route('/api/intelligence')
 def get_intelligence():
     reports = []
+    # Dashboard mencari 'vol', 'rsi', 'mpi', 'tp1', dll.
     for coin, info in active_alerts.items():
-        reports.append({"asset": coin, "signal": info['signal'], "grade": info['grade'], "price": f"{info['price_usd']:.4f}"})
+        reports.append({
+            "asset": coin, 
+            "signal": info['signal'], 
+            "grade": info['grade'], 
+            "price": f"{info['price_usd']:.8f}",
+            "tp1": f"{info['tp1_usd']:.8f}",
+            "rsi": f"{info['rsi']:.2f}",
+            "mpi": f"{info['mpi']:.1f}",
+            "vol": f"{info['vol_spike']:.1f}"
+        })
     return jsonify({"reports": reports})
 
 if __name__ == "__main__":
