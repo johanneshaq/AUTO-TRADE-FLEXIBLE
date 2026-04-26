@@ -15,7 +15,7 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 # ================== 🔐 LOAD DATA ENV ==================
 load_dotenv("DATA.env")
 
-TOKEN = os.getenv("TOKEN_LOW")
+TOKEN = os.getenv("TOKEN_MACRO")
 # Mendukung multi CHAT_ID (pisahkan dengan koma di .env)
 raw_chat_ids = os.getenv("CHAT_ID", "")
 CHAT_IDS = [cid.strip() for cid in raw_chat_ids.split(",") if cid.strip()]
@@ -246,6 +246,23 @@ def index():
     auth = request.authorization
     if not auth or not check_auth(auth.username, auth.password): return authenticate()
     return render_template('index.html') # Pastikan index.html kamu mendukung data dari /api/account
+
+@app.route('/api/close/<pid>', methods=['POST'])
+def api_close(pid):
+    acc = load_account()
+    if pid in acc['positions']:
+        pos = acc['positions'].pop(pid)
+        cp = current_prices.get(pos['symbol'], pos['entry_price'])
+        pnl = calculate_pnl(pos, cp)
+        
+        acc['balance'] += pos['margin'] + pnl
+        acc['total_pnl'] += pnl
+        if pnl > 0: acc['winning_trades'] += 1
+        
+        acc['history'].append({**pos, 'exit_price': cp, 'pnl': round(pnl, 2), 'closed_at': datetime.now().strftime('%H:%M:%S'), 'close_reason': 'Manual Close'})
+        save_account(acc)
+        return jsonify({"success": True, "pnl": pnl})
+    return jsonify({"success": False, "error": "Position not found"}), 404
 
 @app.route('/api/account')
 def api_account():
