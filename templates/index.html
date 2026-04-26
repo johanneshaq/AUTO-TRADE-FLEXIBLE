@@ -119,22 +119,6 @@
     margin-bottom: 14px;
   }
 
-.pie-container {
-  margin-top: 15px;
-  margin-bottom: 20px;
-  padding: 10px;
-  background: var(--bg2);
-  border-radius: 8px;
-  border: 1px solid var(--border);
-}
-
-.pie-legend {
-  margin-top: 15px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-  
   /* ACCOUNT STATS */
   .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .stat-label { font-size: 0.7em; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; }
@@ -410,15 +394,6 @@
   </div>
 </div>
 
-<div class="pie-wrap">
-  <canvas id="pie-chart"></canvas>
-  <div class="pie-center">
-    <div class="pie-center-val" id="pie-center-val">—</div>
-    <div class="pie-center-label">POSITIONS</div>
-  </div>
-</div>
-<div class="pie-legend" id="pie-legend"></div>
-  
 <div style="display: inline-flex; align-items: center; gap: 5px; margin-left: 10px; border-left: 1px solid var(--border); padding-left: 10px;">
     <input type="number" id="custom-balance-input" placeholder="Set Balance" style="width: 80px; background: var(--bg2); border: 1px solid var(--border); color: var(--yellow); padding: 4px; border-radius: 4px; font-family: 'Rajdhani';">
     <button onclick="setBalance()" style="background: var(--green); border:none; color:black; padding: 4px 8px; border-radius:4px; cursor:pointer; font-weight:bold; font-size:11px;">SET $</button>
@@ -434,88 +409,7 @@
 <div class="layout">
 
   <!-- SIDEBAR -->
- <div class="sidebar">
-
-  <div class="panel">
-    <div class="panel-title">Portfolio Allocation</div>
-    
-    <div class="pie-wrap">
-      <canvas id="pie-chart"></canvas>
-      <div class="pie-center">
-        <div class="pie-center-val" id="pie-center-val">—</div>
-        <div class="pie-center-label">POSITIONS</div>
-      </div>
-    </div>
-
-    <div class="pie-legend" id="pie-legend"></div>
-  </div>
-
-  <div class="panel">
-    <div class="panel-title">Account Overview</div>
-    <div class="equity-big" id="equity">$0.00</div>
-    <div class="equity-sub">
-      <span id="upnl-display" style="font-family:'Space Mono',monospace; font-size:0.85em;">uPnL: $0.00</span>
-      &nbsp;|&nbsp;
-      <span id="return-display">+0.00%</span>
-    </div>
-    <div class="stat-grid" style="margin-top:14px;">
-      <div class="stat-item">
-        <div class="stat-label">Balance</div>
-        <div class="stat-value" id="balance">$0.00</div>
-      </div>
-      <div class="stat-item">
-        <div class="stat-label">Used Margin</div>
-        <div class="stat-value" id="used-margin">$0.00</div>
-      </div>
-      <div class="stat-item">
-        <div class="stat-label">Total PnL</div>
-        <div class="stat-value" id="total-pnl">$0.00</div>
-      </div>
-      <div class="stat-item">
-        <div class="stat-label">Win Rate</div>
-        <div class="stat-value yellow" id="win-rate">0%</div>
-      </div>
-    </div>
-  </div>
-
-  <div class="panel" style="flex:1; overflow:hidden; display:flex; flex-direction:column;">
-    <div class="panel-title">Open Positions</div>
-    <div class="positions-list" id="positions-list"></div>
-  </div>
-
-  <div class="panel">
-    <div class="panel-title">Recent Closed</div>
-    <table class="history-table">
-      <thead><tr><th>Symbol</th><th>Dir</th><th>Reason</th><th>PnL</th></tr></thead>
-      <tbody id="history-body"></tbody>
-    </table>
-  </div>
-
-</div>
-
-  <div class="pie-container">
-    <div class="pie-wrap">
-      <canvas id="pie-chart"></canvas>
-      <div class="pie-center">
-        <div class="pie-center-val" id="pie-center-val">—</div>
-        <div class="pie-center-label">POSITIONS</div>
-      </div>
-    </div>
-    
-    <div class="pie-legend" id="pie-legend"></div>
-  </div>
-
-  <div class="stats-grid">
-    <div class="stat-box">
-      <div class="stat-label">AVAILABLE BALANCE</div>
-      <div class="stat-val" id="stat-balance">$0.00</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-label">USED MARGIN</div>
-      <div class="stat-val" id="stat-margin">$0.00</div>
-    </div>
-    </div>
-</div>
+  <div class="sidebar">
 
     <!-- EQUITY -->
     <div class="panel">
@@ -747,24 +641,32 @@ async function checkStartupStatus() {
 
 
 async function confirmReset() {
-  if (confirm("Apakah Anda yakin ingin meriset saldo ke $1000 dan menghapus semua riwayat trading?")) {
-    try {
-      const response = await fetch('/api/account/reset', { 
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      });
-      const data = await response.json();
-      
-      if (data.success) {
-        showToast("Account Reset Successfully!");
-        // Refresh data akun setelah reset
-        fetchAccount(); 
-      } else {
-        alert("Gagal reset: " + data.error);
+  const pass = prompt("Masukkan Password Reset:");
+  
+  if (pass === null) return; 
+
+  if (pass === "130806") {
+    if (confirm("Apakah Anda yakin ingin reset saldo ke $1000 dan menghapus semua riwayat trading?")) {
+      try {
+        const response = await fetch('/api/account/reset', { 
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: pass }) 
+        });
+        const data = await response.json();
+        
+        if (data.success) {
+          showToast("Account Reset Successfully!");
+          fetchAccount(); 
+        } else {
+          alert("Gagal reset: " + data.error);
+        }
+      } catch (err) {
+        console.error("Error resetting account:", err);
       }
-    } catch (err) {
-      console.error("Error resetting account:", err);
     }
+  } else {
+    alert("Password Salah! Akses ditolak.");
   }
 }
 
@@ -915,23 +817,14 @@ function renderPie(positions, stats) {
     }
   });
 
-  legend.innerHTML = positions.map((p, i) => {
-    const pnlValue = p.unrealized_pnl || 0;
-    const color = PIE_COLORS[i % PIE_COLORS.length];
-    const pnlClass = pnlValue >= 0 ? 'var(--green)' : 'var(--red)';
-    const symbolDisplay = p.symbol.replace('/IDR', '');
-
-    return `
-      <div class="legend-item" style="margin-bottom: 8px;">
-        <div class="legend-dot" style="background:${color}"></div>
-        <span class="legend-name" style="font-size: 0.85em; color: var(--text2);">
-          ${symbolDisplay} ${p.direction}
-        </span>
-        <span class="legend-pct" style="font-family: 'Space Mono'; font-size: 0.85em; color: ${pnlClass}">
-          ${pnlValue >= 0 ? '+$' : '-$'}${Math.abs(pnlValue).toFixed(3)}
-        </span>
-      </div>`;
-  }).join('');
+  legend.innerHTML = positions.slice(0, 6).map((p, i) => `
+    <div class="legend-item">
+      <div class="legend-dot" style="background:${PIE_COLORS[i]}"></div>
+      <span class="legend-name">${p.symbol.replace('/USDT','')} ${p.direction}</span>
+      <span class="legend-pct" style="color:${p.unrealized_pnl >= 0 ? 'var(--green)' : 'var(--red)'}">
+        ${p.unrealized_pnl >= 0 ? '+' : ''}$${p.unrealized_pnl.toFixed(3)}
+      </span>
+    </div>`).join('');
 }
 
 // ============================================================
