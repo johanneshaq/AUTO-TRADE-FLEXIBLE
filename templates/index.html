@@ -435,10 +435,63 @@
 
   <!-- SIDEBAR -->
  <div class="sidebar">
-  <div class="section-title">
-    <div class="glow-dot"></div>
-    PORTFOLIO ALLOCATION
+
+  <div class="panel">
+    <div class="panel-title">Portfolio Allocation</div>
+    
+    <div class="pie-wrap">
+      <canvas id="pie-chart"></canvas>
+      <div class="pie-center">
+        <div class="pie-center-val" id="pie-center-val">—</div>
+        <div class="pie-center-label">POSITIONS</div>
+      </div>
+    </div>
+
+    <div class="pie-legend" id="pie-legend"></div>
   </div>
+
+  <div class="panel">
+    <div class="panel-title">Account Overview</div>
+    <div class="equity-big" id="equity">$0.00</div>
+    <div class="equity-sub">
+      <span id="upnl-display" style="font-family:'Space Mono',monospace; font-size:0.85em;">uPnL: $0.00</span>
+      &nbsp;|&nbsp;
+      <span id="return-display">+0.00%</span>
+    </div>
+    <div class="stat-grid" style="margin-top:14px;">
+      <div class="stat-item">
+        <div class="stat-label">Balance</div>
+        <div class="stat-value" id="balance">$0.00</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">Used Margin</div>
+        <div class="stat-value" id="used-margin">$0.00</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">Total PnL</div>
+        <div class="stat-value" id="total-pnl">$0.00</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">Win Rate</div>
+        <div class="stat-value yellow" id="win-rate">0%</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" style="flex:1; overflow:hidden; display:flex; flex-direction:column;">
+    <div class="panel-title">Open Positions</div>
+    <div class="positions-list" id="positions-list"></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Recent Closed</div>
+    <table class="history-table">
+      <thead><tr><th>Symbol</th><th>Dir</th><th>Reason</th><th>PnL</th></tr></thead>
+      <tbody id="history-body"></tbody>
+    </table>
+  </div>
+
+</div>
 
   <div class="pie-container">
     <div class="pie-wrap">
