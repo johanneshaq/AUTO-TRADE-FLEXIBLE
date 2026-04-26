@@ -6,3 +6,4 @@ requests
 websocket-client
 python-dotenv
 pyTelegramBotAPI
+urllib3
