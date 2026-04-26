@@ -394,6 +394,15 @@
   </div>
 </div>
 
+<div class="pie-wrap">
+  <canvas id="pie-chart"></canvas>
+  <div class="pie-center">
+    <div class="pie-center-val" id="pie-center-val">—</div>
+    <div class="pie-center-label">POSITIONS</div>
+  </div>
+</div>
+<div class="pie-legend" id="pie-legend"></div>
+  
 <div style="display: inline-flex; align-items: center; gap: 5px; margin-left: 10px; border-left: 1px solid var(--border); padding-left: 10px;">
     <input type="number" id="custom-balance-input" placeholder="Set Balance" style="width: 80px; background: var(--bg2); border: 1px solid var(--border); color: var(--yellow); padding: 4px; border-radius: 4px; font-family: 'Rajdhani';">
     <button onclick="setBalance()" style="background: var(--green); border:none; color:black; padding: 4px 8px; border-radius:4px; cursor:pointer; font-weight:bold; font-size:11px;">SET $</button>
@@ -809,14 +818,23 @@ function renderPie(positions, stats) {
     }
   });
 
-  legend.innerHTML = positions.slice(0, 6).map((p, i) => `
-    <div class="legend-item">
-      <div class="legend-dot" style="background:${PIE_COLORS[i]}"></div>
-      <span class="legend-name">${p.symbol.replace('/USDT','')} ${p.direction}</span>
-      <span class="legend-pct" style="color:${p.unrealized_pnl >= 0 ? 'var(--green)' : 'var(--red)'}">
-        ${p.unrealized_pnl >= 0 ? '+' : ''}$${p.unrealized_pnl.toFixed(3)}
-      </span>
-    </div>`).join('');
+  legend.innerHTML = positions.map((p, i) => {
+    const pnlValue = p.unrealized_pnl || 0;
+    const color = PIE_COLORS[i % PIE_COLORS.length];
+    const pnlClass = pnlValue >= 0 ? 'var(--green)' : 'var(--red)';
+    const symbolDisplay = p.symbol.replace('/IDR', '');
+
+    return `
+      <div class="legend-item" style="margin-bottom: 8px;">
+        <div class="legend-dot" style="background:${color}"></div>
+        <span class="legend-name" style="font-size: 0.85em; color: var(--text2);">
+          ${symbolDisplay} ${p.direction}
+        </span>
+        <span class="legend-pct" style="font-family: 'Space Mono'; font-size: 0.85em; color: ${pnlClass}">
+          ${pnlValue >= 0 ? '+$' : '-$'}${Math.abs(pnlValue).toFixed(3)}
+        </span>
+      </div>`;
+  }).join('');
 }
 
 // ============================================================
