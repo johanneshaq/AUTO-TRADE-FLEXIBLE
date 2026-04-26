@@ -289,6 +289,7 @@ def api_account():
         p['id'] = pid
         p['symbol_display'] = p['symbol'].split('/')[0] # Ambil BTC saja dari BTC/IDR
         p['current_price'] = cp
+        p['unrealized_pnl'] = round(pnl, 4)
         p['pnl'] = round(pnl, 2)
         p['pnl_pct'] = round((pnl / p['margin']) * 100, 2) if p.get('margin', 0) > 0 else 0
         formatted_positions.append(p)
