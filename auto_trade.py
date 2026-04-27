@@ -120,26 +120,47 @@ def update_virtual_positions():
         cp = current_prices.get(pos['symbol'])
         if not cp: continue
         
-        # Logika Exit Sederhana: TP1 tercapai atau RSI berbalik
         is_long = pos['direction'] == "LONG"
-        hit_tp = (cp >= pos['tp1']) if is_long else (cp <= pos['tp1'])
         
-        if hit_tp:
+        # --- 1. PARTIAL TP 1 (Tutup 50%, Geser SL ke BEP/Entry) ---
+        if not pos.get('tp1_hit') and ((cp >= pos['tp1']) if is_long else (cp <= pos['tp1'])):
+            pos['tp1_hit'] = True
+            pos['sl_idr'] = pos['entry_price'] # Trailing Stop ke Entry
+            # Realisasi 50% Profit
+            pnl = calculate_pnl(pos, cp) * 0.5
+            acc['balance'] += (pos['margin'] * 0.5) + pnl
+            pos['margin'] *= 0.5
+            pos['notional'] *= 0.5
+            broadcast_msg(f"🎯 *TP1 HIT: {pos['symbol']}*\n50% Profit Secured. SL moved to Entry (Risk Free).")
+
+        # --- 2. PARTIAL TP 2 (Tutup 25% lagi, Geser SL ke TP1) ---
+        elif not pos.get('tp2_hit') and ((cp >= pos['tp2']) if is_long else (cp <= pos['tp2'])):
+            pos['tp2_hit'] = True
+            pos['sl_idr'] = pos['tp1'] # Trailing Stop ke TP1
+            pnl = calculate_pnl(pos, cp) * 0.5 # Dari sisa 50%, ambil setengahnya lagi
+            acc['balance'] += (pos['margin'] * 0.5) + pnl
+            pos['margin'] *= 0.5
+            pos['notional'] *= 0.5
+            broadcast_msg(f"🔥 *TP2 HIT: {pos['symbol']}*\nLocked more profit. SL moved to TP1.")
+
+        # --- 3. TP 3 ATAU STOP LOSS (Tutup Sisa Posisi) ---
+        hit_tp3 = (cp >= pos['tp3']) if is_long else (cp <= pos['tp3'])
+        hit_sl  = (cp <= pos.get('sl_idr', 0)) if is_long else (cp >= pos.get('sl_idr', 9999999999))
+        
+        if hit_tp3 or hit_sl:
             pnl = calculate_pnl(pos, cp)
             acc['balance'] += pos['margin'] + pnl
             acc['total_pnl'] += pnl
+            reason = "TP3 Final Target" if hit_tp3 else "Trailing SL Hit"
+            acc['total_trades'] += 1 # Menambah statistik Trades
             if pnl > 0: acc['winning_trades'] += 1
             
-            history_entry = {**pos, 'exit_price': cp, 'pnl': round(pnl, 2), 'closed_at': datetime.now().strftime('%H:%M:%S')}
-            acc['history'].append(history_entry)
+            acc['history'].append({**pos, 'exit_price': cp, 'pnl': round(pnl, 2), 'reason': reason})
             del acc['positions'][pid]
             closed_any = True
-            
-            # Notifikasi Close
-            broadcast_msg(f"✅ *TRADE CLOSED: {pos['symbol']}*\nPnL: IDR {pnl:,.0f}\nReason: TP Hit")
+            broadcast_msg(f"🏁 *TRADE COMPLETED: {pos['symbol']}*\nReason: {reason}\nFinal PnL: Rp {pnl:,.0f}")
 
-    if closed_any:
-        save_account(acc)
+    if closed_any: save_account(acc)
 
 def broadcast_msg(msg, markup=None):
     for cid in CHAT_IDS:
@@ -176,19 +197,26 @@ def get_market_analysis(symbol):
         elif last['rsi'] > 65: signal = "🔴 DISTRIBUTION / SELL"
 
         curr_p = last['close']
-        current_prices[symbol] = curr_p # Update global price for account engine
+        current_prices[symbol] = curr_p 
         
         # Adaptive TP (Revisi: Simpan dalam IDR juga)
         df['range_pct'] = (df['high'] - df['low']) / df['low']
-        avg_range = df['range_pct'].tail(20).mean()
-        base_step = max(min(avg_range, 0.08), 0.01)
+        avg_range = df['range_pct'].tail(20).mean() 
+        base_step = max(min(avg_range, 0.08), 0.01) 
         power_multiplier = 1.0 + (vol_spike_ratio / 10)
 
         if "ACCUMULATION" in signal:
             tp1_idr = curr_p * (1 + base_step)
-        elif "DISTRIBUTION" in signal:
+            tp2_idr = curr_p * (1 + base_step * 1.8 * power_multiplier)
+            tp3_idr = curr_p * (1 + base_step * 3.5 * power_multiplier)
+            sl_idr  = curr_p * (1 - base_step * 1.5)
+        else: # DISTRIBUTION
             tp1_idr = curr_p * (1 - base_step)
-        else: tp1_idr = curr_p
+            tp2_idr = curr_p * (1 - base_step * 1.8 * power_multiplier)
+            tp3_idr = curr_p * (1 - base_step * 3.5 * power_multiplier)
+            sl_idr  = curr_p * (1 + base_step * 1.5)
+
+        usd_rate = get_live_usd_rate()
 
         grade = "C (LOW)"
         if "ACCUMULATION" in signal and mpi > 65 and vol_spike_ratio > 1.5: grade = "A+ (PERFECT)"
@@ -196,38 +224,64 @@ def get_market_analysis(symbol):
         elif (mpi > 65 or mpi < 35) and vol_spike_ratio <= 1.5: grade = "B (EARLY)"
 
         return {
-            'price_usd': (curr_p / current_usd_rate) * 0.95,
+            'price_usd': curr_p / usd_rate,
+            'tp1_usd': tp1_idr / usd_rate,
+            'tp2_usd': tp2_idr / usd_rate,
+            'tp3_usd': tp3_idr / usd_rate,
+            'sl_usd': sl_idr / usd_rate,
             'price_idr': curr_p,
-            'tp1_idr': tp1_idr,
-            'tp1_usd': (tp1_idr / current_usd_rate) * 0.95,
+            'tp1_idr': tp1_idr, 'tp2_idr': tp2_idr, 'tp3_idr': tp3_idr, 'sl_idr': sl_idr,
             'rsi': last['rsi'], 'mpi': mpi, 'signal': signal, 'vol_spike': vol_spike_ratio, 'grade': grade
         }
     except: return None
 
 # ================= 🐋 SCANNER ENGINE =================
+# ================= 🐋 SCANNER ENGINE =================
 def scanner_engine():
     while True:
         for symbol in ALL_IDR_SYMBOLS:
-            try:
+            try: # Mulai blok try dengan benar
                 data = get_market_analysis(symbol)
-                if data is None: continue
-            
+                if not data: 
+                    continue
+                
                 coin_name = symbol.split('/')[0]
-                data['symbol'] = symbol 
                 data['time'] = datetime.now().strftime('%H:%M:%S')
+                data['symbol_display'] = coin_name
                 active_alerts[coin_name] = data
+
+                if hit_tp3 or hit_sl:
+                    pnl = calculate_pnl(pos, cp)
+                    acc['balance'] += pos['margin'] + pnl
+                    acc['total_pnl'] += pnl
+            
+            # --- TAMBAHKAN INI UNTUK UPDATE STATISTIK ---
+                    acc['total_trades'] += 1
+                    if pnl > 0:
+                        acc['winning_trades'] += 1
+            # --------------------------------------------
+
+                    reason = "TP3 Final Target" if hit_tp3 else "Trailing SL Hit"
+                    acc['history'].append({
+                **pos, 
+                        'exit_price': cp, 
+                        'pnl': round(pnl, 2), 
+                        'closed_at': datetime.now().strftime('%H:%M:%S'),
+                        'close_reason': reason
+                    })
+                    del acc['positions'][pid]
+                    closed_any = True
+                    broadcast_msg(f"🏁 *TRADE COMPLETED: {pos['symbol']}*\nReason: {reason}\nFinal PnL: Rp {pnl:,.0f}")
+
+                if closed_any: save_account(acc)
 
                 # UPDATE POSISI VIRTUAL
                 update_virtual_positions()
 
-                # EKSEKUSI OTOMATIS JIKA GRADE A+
                 if data['grade'] == "A+ (PERFECT)":
                     if coin_name not in last_alerts or last_alerts[coin_name] != data['signal']:
-                        
-                        # 1. Buka Posisi di Virtual Account
                         pos = open_virtual_trade(symbol, data)
                         
-                        # 2. Kirim Notifikasi Telegram
                         status_trade = "✅ AUTO-TRADE EXECUTED" if pos else "⚠️ SCANNER ALERT (Max Pos Reached)"
                         msg = (
                             f"🌟 **{status_trade}** 🌟\n"
@@ -242,11 +296,12 @@ def scanner_engine():
                         markup = InlineKeyboardMarkup()
                         markup.add(InlineKeyboardButton("📊 Chart", url=f"https://indodax.com/market/{coin_name}IDR"))
                         broadcast_msg(msg, markup)
-                        
                         last_alerts[coin_name] = data['signal']
-                time.sleep(1)
-            except: continue
-        time.sleep(30)
+                time.sleep(0.5) 
+            except Exception as e: # Tambahkan variabel error agar mudah di-debug
+                print(f"Error scanning {symbol}: {e}")
+                continue
+        time.sleep(10)
 
 # ================= 🌐 ROUTES =================
 @app.route('/')
@@ -328,6 +383,17 @@ def api_reset():
     save_account(acc)
     return jsonify({"success": True, "message": "Account reset to $1000"})
 
+@app.route('/api/account/stats')
+def api_stats():
+    acc = load_account() # Pastikan fungsi load_account() membaca file JSON terbaru
+    stats = {
+        'balance': f"${acc['balance']:.2f}",
+        'total_trades': acc.get('total_trades', 0),
+        'winrate': f"{(acc['winning_trades']/acc['total_trades']*100) if acc['total_trades'] > 0 else 0:.1f}%",
+        'pnl': f"${acc.get('total_pnl', 0):.2f}"
+    }
+    return jsonify(stats)
+
 @app.route('/api/status')
 def get_status():
     """Mengaktifkan dashboard agar status menjadi 'LIVE'"""
@@ -344,6 +410,8 @@ def api_market():
     """Mengirim daftar koin ke tabel 'MARKET SIGNALS'"""
     all_data = list(active_alerts.values())
     
+    all_data.sort(key=lambda x: x.get('time', ''), reverse=True)
+
     # Menghitung ringkasan untuk summary bar
     longs = sum(1 for d in all_data if "ACCUMULATION" in d['signal'])
     shorts = sum(1 for d in all_data if "DISTRIBUTION" in d['signal'])
