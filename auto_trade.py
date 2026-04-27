@@ -452,7 +452,37 @@ if __name__ == "__main__":
     exchange.load_markets()
     ALL_IDR_SYMBOLS = [s for s in exchange.markets if s.endswith('/IDR')]
     print(f"🚀 Bot Started. Scanning {len(ALL_IDR_SYMBOLS)} Indodax assets.")
-    
+
+@bot.message_handler(commands=['cek'])
+def check_coin(message):
+    try:
+        # Mengambil nama koin dari pesan (misal: /cek BTC)
+        args = message.text.split()
+        if len(args) < 2:
+            bot.reply_to(message, "⚠️ Format salah. Gunakan: `/cek BTC` atau `/cek ETH`")
+            return
+
+        coin_name = args[1].upper()
+        symbol = f"{coin_name}/IDR"
+        
+        # Mengambil analisis menggunakan Intelligence Engine yang sudah ada
+        data = get_market_analysis(symbol)
+        
+        if data:
+            msg = (
+                f"🔍 **ANALISIS MANUAL: {coin_name}**\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"💵 Price: `${data['price_usd']:.4f}`\n"
+                f"📢 Signal: **{data['signal']}**\n"
+                f"🏆 Grade: **{data['grade']}**\n"
+                f"📈 RSI: `{data['rsi']:.2f}` | 🐳 MPI: `{data['mpi']:.1f}%`"
+            )
+            bot.reply_to(message, msg, parse_mode='Markdown')
+        else:
+            bot.reply_to(message, f"❌ Koin `{coin_name}` tidak ditemukan atau gagal dianalisis.")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Terjadi kesalahan: {str(e)}")
+        
     threading.Thread(target=scanner_engine, daemon=True).start()
     threading.Thread(target=lambda: bot.infinity_polling(), daemon=True).start()
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8000)))
