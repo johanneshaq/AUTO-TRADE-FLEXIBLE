@@ -183,6 +183,18 @@ current_usd_rate = 16200
 ALL_IDR_SYMBOLS = []
 va = VirtualAccount()   # 🏦 The virtual account instance
 
+# ── Startup progress (dipakai oleh /api/status dan fetch_all_markets) ──
+startup_state = {
+    'phase': 'INIT',
+    'progress': 0,
+    'total': 0,
+    'scanned': 0,
+    'watchlist': 0,
+    'ready': False,
+}
+# ── Margin config dari web ──
+margin_config = {'pct': 10}
+
 
 # ================== 🔐 WEB AUTH ==================
 def check_auth(username, password):
@@ -198,8 +210,12 @@ def authenticate():
 def fetch_all_markets():
     global ALL_IDR_SYMBOLS
     try:
+        startup_state['phase'] = 'LOADING_OHLCV'
         markets = exchange.load_markets()
         ALL_IDR_SYMBOLS = [s for s in markets if s.endswith('/IDR')]
+        startup_state['total']     = len(ALL_IDR_SYMBOLS)
+        startup_state['watchlist'] = len(ALL_IDR_SYMBOLS)
+        startup_state['phase']     = 'SCANNING'
         print(f"✅ Intelligence Engine Ready: {len(ALL_IDR_SYMBOLS)} Assets Scanned.")
     except Exception as e:
         print(f"❌ Error fetch markets: {e}")
@@ -543,9 +559,17 @@ def _send_close_notification(trade: dict, close_price: float, pnl: float, reason
 # ================== 🐋 SCANNER ENGINE ==================
 def whale_and_anomaly_detector():
     while True:
+        scanned_count = 0
         for symbol in ALL_IDR_SYMBOLS:
             try:
                 data = get_market_analysis(symbol)
+                scanned_count += 1
+                startup_state['progress'] = scanned_count
+                startup_state['scanned']  = scanned_count
+                if scanned_count >= 5:
+                    startup_state['ready'] = True
+                    startup_state['phase'] = 'READY'
+
                 if data is None:
                     continue
 
@@ -739,6 +763,7 @@ def handle_close_callback(call):
 
 
 # ================== 🌐 WEB API ==================
+
 @app.route('/')
 def index():
     auth = request.authorization
@@ -747,6 +772,261 @@ def index():
     return render_template('index.html')
 
 
+# ── /api/status — untuk progress bar startup HTML ──
+@app.route('/api/status')
+def api_status():
+    return jsonify(startup_state)
+
+
+# ── /api/market — data sinyal untuk feed cards HTML ──
+@app.route('/api/market')
+def api_market():
+    auth = request.authorization
+    if not auth or not check_auth(auth.username, auth.password):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = []
+    longs = shorts = a_plus = 0
+
+    for coin, info in active_alerts.items():
+        direction = info.get('direction', 'NONE')
+        grade_raw = info.get('grade', 'C (LOW)')
+
+        # Normalize grade label untuk HTML: "A+ (PERFECT)" → "A+", "B (EARLY)" → "B", else "C"
+        if 'A+' in grade_raw or 'PERFECT' in grade_raw:
+            grade = 'A+'
+            a_plus += 1
+        elif 'B' in grade_raw or 'EARLY' in grade_raw:
+            grade = 'B'
+        else:
+            grade = 'C'
+
+        if direction == 'LONG':   longs += 1
+        elif direction == 'SHORT': shorts += 1
+
+        # Hitung aggregate score dari RSI & MPI (0–100)
+        rsi = info.get('rsi', 50)
+        mpi = info.get('mpi', 50)
+        vol = info.get('vol_spike', 1)
+        if direction == 'LONG':
+            score = max(0, min(100, (100 - rsi) * 0.4 + mpi * 0.4 + min(vol * 5, 20)))
+        elif direction == 'SHORT':
+            score = max(0, min(100, rsi * 0.4 + (100 - mpi) * 0.4 + min(vol * 5, 20)))
+        else:
+            score = 50
+
+        # Build reasons pills
+        reasons = []
+        if rsi < 35: reasons.append('RSI OVERSOLD')
+        if rsi > 65: reasons.append('RSI OVERBOUGHT')
+        if mpi > 65: reasons.append('BULL POWER HIGH')
+        if mpi < 35: reasons.append('BEAR POWER HIGH')
+        if vol > 2:  reasons.append(f'VOL {vol:.1f}x SPIKE')
+        if info.get('anomaly_bearish'): reasons.append('BEARISH ANOMALY')
+        if info.get('anomaly_bullish'): reasons.append('BULLISH ANOMALY')
+
+        tf_data = {
+            'score': score, 'direction': direction,
+            'rsi': rsi, 'mpi': mpi,
+            'vol_spike': vol,
+            'vwap': info.get('price_usd', 0),   # approx: no real VWAP in this bot
+            'cvd': (mpi - 50) * vol * 10,         # synthetic CVD
+            'stoch_k': max(0, min(100, rsi + (mpi - 50) * 0.3)),  # synthetic stoch
+            'tp1': f"{info.get('tp1_usd', 0):.8f}",
+            'tp2': f"{info.get('tp2_usd', 0):.8f}",
+            'tp3': f"{info.get('tp3_usd', 0):.8f}",
+            'sl':  f"{info.get('sl_usd', 0):.8f}",
+            'reasons': reasons,
+        }
+
+        data.append({
+            'symbol': f"{coin}/IDR",
+            'price':  f"{info.get('price_usd', 0):.8f}",
+            'grade':  grade,
+            'agg_score':     score,
+            'agg_direction': direction,
+            'funding_rate':  0.0,     # Indodax tidak ada funding rate
+            'open_interest': 0,
+            'ls_ratio':      1.0,
+            'orderbook':     {'ob_imbalance': mpi / 100},
+            'timeframes': {
+                '1h': tf_data,
+                'AGG': tf_data,
+            },
+        })
+
+    return jsonify({
+        'data':          data,
+        'timestamp':     datetime.utcnow().strftime('%H:%M:%S'),
+        'total_scanned': len(active_alerts),
+        'longs':         longs,
+        'shorts':        shorts,
+        'a_plus':        a_plus,
+    })
+
+
+# ── /api/prices — realtime price update per card ──
+@app.route('/api/prices')
+def api_prices():
+    auth = request.authorization
+    if not auth or not check_auth(auth.username, auth.password):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    prices = {}
+    for coin, info in active_alerts.items():
+        prices[f"{coin}/IDR"]  = info.get('price_usd', 0)
+        prices[coin]           = info.get('price_usd', 0)
+    return jsonify({'prices': prices})
+
+
+# ── /api/account — format lengkap yang diharapkan HTML renderAccount() ──
+@app.route('/api/account')
+def get_account():
+    auth = request.authorization
+    if not auth or not check_auth(auth.username, auth.password):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    s = va.get_summary()
+
+    # Hitung unrealized PnL dari semua trade aktif
+    upnl = 0.0
+    positions = []
+    for t in va.active_trades.values():
+        coin = t['coin']
+        info = active_alerts.get(coin, {})
+        curr_price = info.get('price_usd', t['entry'])
+        qty = t['qty'] * t['remaining_qty_pct']
+        if t['direction'] == 'LONG':
+            trade_upnl = (curr_price - t['entry']) * qty
+        else:
+            trade_upnl = (t['entry'] - curr_price) * qty
+        upnl += trade_upnl
+
+        pnl_pct = ((curr_price - t['entry']) / t['entry'] * 100) if t['entry'] > 0 else 0
+        if t['direction'] == 'SHORT': pnl_pct *= -1
+
+        positions.append({
+            'id':              t['id'],
+            'symbol':          f"{coin}/USDT",
+            'direction':       t['direction'],
+            'leverage':        1,
+            'entry_price':     f"{t['entry']:.8f}",
+            'current_price':   f"{curr_price:.8f}",
+            'margin':          t['size_usd'],
+            'tp1':             f"{t['tp1']:.8f}",
+            'tp2':             f"{t['tp2']:.8f}",
+            'sl':              f"{t['sl']:.8f}",
+            'tp1_hit':         t['tp1_hit'],
+            'tp2_hit':         t['tp2_hit'],
+            'unrealized_pnl':  round(trade_upnl, 6),
+            'pnl_pct':         round(pnl_pct, 2),
+            'bep':             t['bep_active'],
+            'trailing':        t.get('trailing_active', False),
+            'remaining_pct':   f"{t['remaining_qty_pct']*100:.0f}%",
+            'open_time':       t['open_time'],
+        })
+
+    history = []
+    for t in va.trade_history[-20:]:
+        history.append({
+            'id':           t['id'],
+            'symbol':       f"{t['coin']}/USDT",
+            'direction':    t['direction'],
+            'entry_price':  f"{t['entry']:.8f}",
+            'realized_pnl': round(t['realized_pnl'], 6),
+            'close_reason': t.get('close_reason', 'CLOSED'),
+            'close_time':   t.get('close_time', ''),
+        })
+
+    equity = s['total_margin'] + upnl
+    total_pnl = sum(t['realized_pnl'] for t in va.trade_history)
+    used_margin = s['total_margin'] - s['available_margin']
+    return_pct = ((equity - VirtualAccount.DEFAULT_MARGIN) / VirtualAccount.DEFAULT_MARGIN * 100)
+
+    return jsonify({
+        'stats': {
+            'equity':           round(equity, 4),
+            'balance':          s['total_margin'],
+            'unrealized_pnl':   round(upnl, 6),
+            'total_pnl':        round(total_pnl, 4),
+            'total_return_pct': round(return_pct, 2),
+            'win_rate':         s['win_rate'],
+            'total_trades':     s['total_closed'],
+            'used_margin':      round(used_margin, 2),
+            'open_positions':   s['active_trades'],
+            'per_trade_size':   s['per_trade_size'],
+        },
+        'positions': positions,
+        'history':   history,
+    })
+
+
+# ── /api/account/set_balance — set balance dari HTML input ──
+@app.route('/api/account/set_balance', methods=['POST'])
+def api_set_balance():
+    auth = request.authorization
+    if not auth or not check_auth(auth.username, auth.password):
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.json
+    new_balance = float(data.get('balance', 0))
+    if new_balance < 10:
+        return jsonify({"success": False, "error": "Minimum $10"}), 400
+    va.set_margin(new_balance)
+    return jsonify({"success": True, "balance": va.total_margin})
+
+
+# ── /api/account/reset — reset akun ke $1000 ──
+@app.route('/api/account/reset', methods=['POST'])
+def api_reset_account():
+    auth = request.authorization
+    if not auth or not check_auth(auth.username, auth.password):
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.json
+    if data.get('password') != "130806":
+        return jsonify({"success": False, "error": "Wrong password"}), 403
+
+    with va.lock:
+        va.total_margin    = VirtualAccount.DEFAULT_MARGIN
+        va.available_margin = VirtualAccount.DEFAULT_MARGIN
+        va.active_trades   = {}
+        va.trade_history   = []
+        va.trade_counter   = 0
+    return jsonify({"success": True, "balance": va.total_margin})
+
+
+# ── /api/close/<pos_id> — close posisi dari tombol CLOSE di HTML ──
+@app.route('/api/close/<pos_id>', methods=['POST'])
+def api_close_position(pos_id):
+    auth = request.authorization
+    if not auth or not check_auth(auth.username, auth.password):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    trade = va.active_trades.get(pos_id)
+    if not trade:
+        return jsonify({"success": False, "error": "Trade not found"}), 404
+
+    coin = trade['coin']
+    info = active_alerts.get(coin, {})
+    curr_price = info.get('price_usd', trade['entry'])
+    pnl = va.close_trade_full(pos_id, curr_price, "WEB_CLOSE")
+    return jsonify({"success": True, "pnl": round(pnl, 6)})
+
+
+# ── /api/config/margin — set margin % dari HTML ──
+@app.route('/api/config/margin', methods=['POST'])
+def api_config_margin():
+    auth = request.authorization
+    if not auth or not check_auth(auth.username, auth.password):
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.json
+    pct = float(data.get('margin', 10))
+    if not (1 <= pct <= 100):
+        return jsonify({"success": False, "error": "Margin 1–100%"}), 400
+    margin_config['pct'] = pct
+    return jsonify({"success": True, "margin_pct": pct})
+
+
+# ── /api/intelligence — legacy endpoint (tetap ada) ──
 @app.route('/api/intelligence')
 def get_intelligence():
     auth = request.authorization
@@ -769,40 +1049,6 @@ def get_intelligence():
             "atr": f"{info.get('atr', 0):.4f}",
         })
     return jsonify({"reports": reports})
-
-
-@app.route('/api/account')
-def get_account():
-    auth = request.authorization
-    if not auth or not check_auth(auth.username, auth.password):
-        return jsonify({"error": "Unauthorized"}), 401
-    summary = va.get_summary()
-    active = []
-    for t in va.active_trades.values():
-        active.append({
-            "id": t['id'], "coin": t['coin'], "direction": t['direction'],
-            "entry": f"{t['entry']:.8f}", "sl": f"{t['sl']:.8f}",
-            "tp1": f"{t['tp1']:.8f}", "tp2": f"{t['tp2']:.8f}", "tp3": f"{t['tp3']:.8f}",
-            "size": f"{t['size_usd']:.2f}",
-            "tp1_hit": t['tp1_hit'], "tp2_hit": t['tp2_hit'],
-            "bep": t['bep_active'], "trailing": t.get('trailing_active', False),
-            "remaining_pct": f"{t['remaining_qty_pct']*100:.0f}%",
-            "open_time": t['open_time'],
-        })
-    return jsonify({"summary": summary, "active_trades": active})
-
-
-@app.route('/api/setmargin', methods=['POST'])
-def api_set_margin():
-    auth = request.authorization
-    if not auth or not check_auth(auth.username, auth.password):
-        return jsonify({"error": "Unauthorized"}), 401
-    data = request.json
-    new_margin = float(data.get('margin', 0))
-    if new_margin < 10:
-        return jsonify({"error": "Minimum $10"}), 400
-    va.set_margin(new_margin)
-    return jsonify({"success": True, "new_margin": va.total_margin, "per_trade": va.get_trade_size()})
 
 
 # ================== 🚀 MAIN ==================
