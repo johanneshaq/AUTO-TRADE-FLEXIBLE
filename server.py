@@ -44,6 +44,15 @@ async def init_db():
     if not DATABASE_URL:
         print("[DB] DATABASE_URL tidak ada, pakai in-memory saja")
         return
+    for attempt in range(5):
+        try:
+            db_pool = await asyncpg.create_pool(DATABASE_URL, ssl="require")
+            break
+        except Exception as e:
+            print(f"[DB] Attempt {attempt+1} gagal: {e}. Retry 5s...")
+            await asyncio.sleep(5)
+    if not db_pool:
+        print("[DB] Gagal connect DB setelah 5x — lanjut in-memory")
     db_pool = await asyncpg.create_pool(DATABASE_URL, ssl="require")
     async with db_pool.acquire() as conn:
         await conn.execute("""
