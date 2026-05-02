@@ -12,6 +12,7 @@ import requests
 import os
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
+from ai_chat_handler import register_ai_handlers, AI_COMMANDS_HELP
 
 # ================== 🔐 LOAD DATA ENV ==================
 load_dotenv("DATA.env")
