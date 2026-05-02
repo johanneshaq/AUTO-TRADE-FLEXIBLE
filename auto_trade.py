@@ -12,7 +12,6 @@ import requests
 import os
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
-from ai_chat_handler import register_ai_handlers, AI_COMMANDS_HELP
 
 # ================== 🔐 LOAD DATA ENV ==================
 load_dotenv("DATA.env")
@@ -20,6 +19,7 @@ load_dotenv("DATA.env")
 TOKEN = os.getenv("TOKEN_MACRO")
 CHAT_ID = os.getenv("CHAT_ID")
 WEB_PASSWORD = os.getenv("WEB_PASSWORD", "181268")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
 if not TOKEN or not CHAT_ID:
     raise ValueError("❌ Kritis: TOKEN / CHAT_ID belum diset di DATA.env.")
@@ -195,6 +195,12 @@ startup_state = {
 }
 # ── Margin config dari web ──
 margin_config = {'pct': 10}
+
+# ================== 🤖 AI CHAT CONFIG ==================
+ANTHROPIC_API_URL  = "https://api.anthropic.com/v1/messages"
+AI_MODEL           = "claude-sonnet-4-20250514"
+AI_MAX_HISTORY     = 10   # pesan per user yg disimpan
+conversation_history: dict = {}   # { chat_id: [ {role, content}, ... ] }
 
 
 # ================== 🔐 WEB AUTH ==================
@@ -611,6 +617,148 @@ def whale_and_anomaly_detector():
         time.sleep(30)
 
 
+# ================== 🤖 AI CHAT ENGINE ==================
+
+def build_ai_system_prompt() -> str:
+    """Bangun system prompt real-time dari data bot saat ini."""
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    s   = va.get_summary()
+
+    # ── Account ──
+    account_ctx = (
+        f"=== VIRTUAL ACCOUNT ===\n"
+        f"Total Margin : ${s['total_margin']:.2f}\n"
+        f"Available    : ${s['available_margin']:.2f}\n"
+        f"Per Trade    : ${s['per_trade_size']:.2f}\n"
+        f"Active Trades: {s['active_trades']}\n"
+        f"Total Closed : {s['total_closed']}\n"
+        f"Win Rate     : {s['win_rate']}%\n"
+        f"Total PnL    : ${s['total_pnl']:.4f}\n"
+    )
+
+    # ── Running Trades ──
+    if va.active_trades:
+        trades_ctx = "=== RUNNING TRADES ===\n"
+        for t in va.active_trades.values():
+            curr = active_alerts.get(t['coin'], {}).get('price_usd', t['entry'])
+            qty  = t['qty'] * t['remaining_qty_pct']
+            upnl = (curr - t['entry']) * qty if t['direction'] == 'LONG' else (t['entry'] - curr) * qty
+            trades_ctx += (
+                f"[{t['id']}] {t['coin']} {t['direction']} | "
+                f"Entry:${t['entry']:.6f} Now:${curr:.6f} uPnL:${upnl:.4f} | "
+                f"SL:${t['sl']:.6f} TP1:${t['tp1']:.6f} | "
+                f"TP1hit:{t['tp1_hit']} BEP:{t['bep_active']} "
+                f"Trailing:{t.get('trailing_active',False)} | "
+                f"Sisa:{t['remaining_qty_pct']*100:.0f}%\n"
+            )
+    else:
+        trades_ctx = "=== RUNNING TRADES ===\nTidak ada trade aktif.\n"
+
+    # ── History ──
+    if va.trade_history:
+        hist_ctx = "=== HISTORY TRADE (5 TERAKHIR) ===\n"
+        for t in list(reversed(va.trade_history))[:5]:
+            emoji = "✅" if t['realized_pnl'] >= 0 else "❌"
+            hist_ctx += (
+                f"{emoji} [{t['id']}] {t['coin']} {t['direction']} | "
+                f"PnL:${t['realized_pnl']:.4f} | "
+                f"Close:{t.get('close_reason','N/A')} | {t.get('close_time','N/A')}\n"
+            )
+    else:
+        hist_ctx = "=== HISTORY TRADE ===\nBelum ada trade selesai.\n"
+
+    # ── Market ──
+    if active_alerts:
+        a_plus = sum(1 for d in active_alerts.values() if 'A+' in d.get('grade',''))
+        longs  = sum(1 for d in active_alerts.values() if d.get('direction') == 'LONG')
+        shorts = sum(1 for d in active_alerts.values() if d.get('direction') == 'SHORT')
+        top10  = sorted(active_alerts.items(),
+                        key=lambda x: abs(x[1].get('mpi',50)-50) + x[1].get('vol_spike',0),
+                        reverse=True)[:10]
+        market_ctx = (
+            f"=== MARKET (TOP 10 SINYAL) ===\n"
+            f"Dipantau:{len(active_alerts)} | A+:{a_plus} | LONG:{longs} | SHORT:{shorts}\n"
+        )
+        for coin, d in top10:
+            market_ctx += (
+                f"{coin}: {d.get('signal','?')} | Grade:{d.get('grade','?')} | "
+                f"${d.get('price_usd',0):.6f} | RSI:{d.get('rsi',0):.1f} | "
+                f"MPI:{d.get('mpi',0):.1f}% | Vol:{d.get('vol_spike',0):.1f}x\n"
+            )
+    else:
+        market_ctx = "=== MARKET ===\nMesin warming up, belum ada data.\n"
+
+    status_ctx = (
+        f"=== STATUS MESIN ===\n"
+        f"Waktu:{now} | Aset dipantau:{len(active_alerts)} | "
+        f"Exchange:Indodax | USD Rate:Rp{current_usd_rate:,.0f}\n"
+    )
+
+    return (
+        "Kamu adalah asisten trading AI terintegrasi langsung dengan bot trading crypto.\n"
+        "Kamu punya akses data real-time berikut:\n\n"
+        f"{account_ctx}\n{trades_ctx}\n{hist_ctx}\n{market_ctx}\n{status_ctx}\n"
+        "ATURAN JAWAB:\n"
+        "- Singkat, padat, pakai angka real dari data di atas\n"
+        "- Jangan mengarang data yang tidak ada di konteks\n"
+        "- Kalau koin tidak ada di data, bilang tidak ada sinyal aktif\n"
+        "- Jawab Bahasa Indonesia, boleh pakai emoji\n"
+        "- Untuk analisa teknikal gunakan RSI/MPI/Vol Spike yang tersedia\n"
+    )
+
+
+def ai_ask(chat_id: int, user_message: str) -> str:
+    """Kirim pesan ke Anthropic API dengan conversation history."""
+    if not ANTHROPIC_API_KEY:
+        return "❌ ANTHROPIC_API_KEY belum diset di DATA.env"
+
+    if chat_id not in conversation_history:
+        conversation_history[chat_id] = []
+
+    conversation_history[chat_id].append({"role": "user", "content": user_message})
+
+    # Trim history
+    if len(conversation_history[chat_id]) > AI_MAX_HISTORY * 2:
+        conversation_history[chat_id] = conversation_history[chat_id][-(AI_MAX_HISTORY * 2):]
+
+    try:
+        resp = requests.post(
+            ANTHROPIC_API_URL,
+            headers={
+                "x-api-key":          ANTHROPIC_API_KEY,
+                "anthropic-version":  "2023-06-01",
+                "content-type":       "application/json",
+            },
+            json={
+                "model":      AI_MODEL,
+                "max_tokens": 1024,
+                "system":     build_ai_system_prompt(),
+                "messages":   conversation_history[chat_id],
+            },
+            timeout=30
+        )
+        resp.raise_for_status()
+        reply = resp.json()['content'][0]['text']
+        conversation_history[chat_id].append({"role": "assistant", "content": reply})
+        return reply
+    except requests.exceptions.Timeout:
+        return "⏱️ AI timeout, coba lagi."
+    except requests.exceptions.HTTPError as e:
+        return f"❌ API error: {e.response.status_code}"
+    except Exception as e:
+        return f"❌ Error: {str(e)}"
+
+
+def _send_ai_reply(m, text: str):
+    """Helper: kirim typing action lalu jawaban AI."""
+    bot.send_chat_action(m.chat.id, 'typing')
+    reply = ai_ask(m.chat.id, text)
+    try:
+        bot.reply_to(m, reply, parse_mode='Markdown')
+    except Exception:
+        bot.reply_to(m, reply)
+
+
 # ================== 💬 BOT COMMANDS ==================
 @bot.message_handler(commands=['cek'])
 def cmd_cek(m):
@@ -743,6 +891,110 @@ def cmd_history(m):
             f"─────────────────────\n"
         )
     bot.send_message(m.chat.id, msg, parse_mode='Markdown')
+
+
+# ================== 🤖 AI INTERACTIVE COMMANDS ==================
+
+@bot.message_handler(commands=['ai'])
+def cmd_ai(m):
+    parts = m.text.split(maxsplit=1)
+    if len(parts) < 2:
+        bot.reply_to(m,
+            "💬 *AI Trading Assistant*\n\n"
+            "Kirim pertanyaan bebas:\n"
+            "`/ai cek btc`\n"
+            "`/ai status mesin`\n"
+            "`/ai portofolio gw gimana?`\n"
+            "`/ai analisa pasar sekarang`\n\n"
+            "Atau pakai shortcut:\n"
+            "`/portofolio` `/running` `/mesin` `/pasar`\n"
+            "`/cekAI [koin]` `/reset_chat`",
+            parse_mode='Markdown'
+        )
+        return
+    _send_ai_reply(m, parts[1])
+
+
+@bot.message_handler(commands=['portofolio'])
+def cmd_portofolio(m):
+    _send_ai_reply(m, "Tampilkan ringkasan lengkap portofolio virtual account saya: equity, margin tersedia, unrealized PnL, dan semua posisi aktif.")
+
+
+@bot.message_handler(commands=['running'])
+def cmd_running(m):
+    _send_ai_reply(m, "Tampilkan semua running trade aktif: entry, harga sekarang, unrealized PnL, status SL/TP/BEP/trailing, dan sisa posisi.")
+
+
+@bot.message_handler(commands=['mesin'])
+def cmd_mesin(m):
+    _send_ai_reply(m, "Cek status mesin scanner: berapa aset dipantau, berapa sinyal A+, perbandingan LONG vs SHORT, dan kondisi umum pasar.")
+
+
+@bot.message_handler(commands=['pasar'])
+def cmd_pasar(m):
+    _send_ai_reply(m, "Analisa kondisi pasar secara keseluruhan dari data sinyal yang ada. Sentiment bullish atau bearish? Koin mana yang paling menarik?")
+
+
+@bot.message_handler(commands=['cekAI'])
+def cmd_cek_ai(m):
+    parts = m.text.split()
+    if len(parts) < 2:
+        bot.reply_to(m, "Gunakan: `/cekAI btc`", parse_mode='Markdown')
+        return
+    coin = parts[1].upper().replace("IDR", "").replace("USDT", "")
+    _send_ai_reply(m, f"Analisa lengkap untuk koin {coin}: sinyal aktif, RSI, MPI, volume spike, grade, level SL/TP, dan apakah layak entry sekarang.")
+
+
+@bot.message_handler(commands=['reset_chat'])
+def cmd_reset_chat(m):
+    conversation_history.pop(m.chat.id, None)
+    bot.reply_to(m, "🗑️ History percakapan AI dihapus. Mulai sesi baru.")
+
+
+@bot.message_handler(commands=['help'])
+def cmd_help(m):
+    msg = (
+        "📋 *SEMUA COMMAND*\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "*Trading & Akun:*\n"
+        "`/cek [koin]` — Analisa teknikal\n"
+        "`/akun` — Summary virtual account\n"
+        "`/setmargin [angka]` — Set custom margin\n"
+        "`/trades` — Trade aktif\n"
+        "`/closetrade [ID]` — Tutup trade manual\n"
+        "`/history` — 5 trade terakhir\n\n"
+        "*AI Assistant:*\n"
+        "`/ai [pertanyaan]` — Chat bebas dengan AI\n"
+        "`/cekAI [koin]` — Analisa AI untuk koin\n"
+        "`/portofolio` — Ringkasan akun & posisi\n"
+        "`/running` — Status semua trade aktif\n"
+        "`/mesin` — Status scanner & pasar\n"
+        "`/pasar` — Analisa sentimen pasar\n"
+        "`/reset_chat` — Hapus history AI\n\n"
+        "💡 Bisa juga chat bebas tanpa command!"
+    )
+    bot.send_message(m.chat.id, msg, parse_mode='Markdown')
+
+
+@bot.message_handler(func=lambda msg: msg.text and not msg.text.startswith('/'))
+def handle_free_chat(m):
+    """Auto-reply pesan bebas yang mengandung kata kunci trading."""
+    keywords = [
+        'cek','btc','eth','sol','bnb','xrp','doge','ada',
+        'trade','profit','rugi','pnl','portofolio','saldo',
+        'beli','jual','long','short','entry','exit',
+        'sinyal','signal','analisa','analisis',
+        'rsi','mpi','volume','pasar','market',
+        'running','history','mesin','scanner',
+        'sl','tp','stop','trailing',
+        'gimana','bagaimana','kapan','kenapa','berapa',
+    ]
+    text_lower = m.text.lower()
+    has_keyword = any(k in text_lower for k in keywords)
+    has_history = m.chat.id in conversation_history and len(conversation_history[m.chat.id]) > 0
+
+    if has_keyword or has_history:
+        _send_ai_reply(m, m.text)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("close_"))
